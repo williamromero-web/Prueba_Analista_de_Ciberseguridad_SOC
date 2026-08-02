@@ -1,0 +1,18 @@
+# ===========================================================================
+#  Levanta el entorno de demostración con un solo comando:
+#     docker compose up -d --build
+# ===========================================================================
+version: '3.8'
+
+services:
+  fleetsec-app:
+    build: .
+    container_name: fleetsec-api
+    ports:
+      - "3000:3000"
+    environment:
+      # El secreto de sesión se pasa por variable de entorno
+      - NODE_ENV=staging
+      - JWT_SECRET=cambie_este_secreto_en_produccion_32chars
+      - PORT=3000
+    restart: unless-stopped

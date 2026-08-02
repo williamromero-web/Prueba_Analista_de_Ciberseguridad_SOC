@@ -1,0 +1,3 @@
+Documento público de ejemplo que entrega el endpoint /api/files.
+Sirve para comprobar que, después de corregir la lectura de rutas, el acceso
+legítimo a un archivo permitido sigue funcionando con normalidad.

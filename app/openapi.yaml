@@ -1,0 +1,105 @@
+openapi: 3.0.0
+info:
+  title: FleetSec API
+  version: 1.0.0
+  description: >
+    Especificacion de la API usada en el laboratorio. El escaner dinámico se
+    apoya en este archivo para recorrer los endpoints con un token de sesión y
+    cubrir al menos el 80 por ciento de la superficie.
+servers:
+  - url: http://localhost:3000
+
+# Se declaran todos los endpoints para que el escaner dinámico los recorra por
+# completo. El token de sesión se aplica donde corresponde.
+paths:
+  /api/login:
+    post:
+      summary: Autenticación de usuario y entrega del token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: Token entregado }
+        '401': { description: Credenciales invalidas }
+
+  /api/proxy:
+    get:
+      summary: Consulta de recursos externos, superficie de peticiones forzadas
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '403': { description: Destino no permitido }
+
+  /api/users/{id}:
+    get:
+      summary: Consultar perfil de usuario, superficie de acceso indebido e inyección
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '403': { description: Acceso denegado }
+        '404': { description: No encontrado }
+
+  /api/xml-upload:
+    post:
+      summary: Procesar XML, superficie de entidades externas
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: XML inválido o declaración rechazada }
+
+  /api/users/update:
+    post:
+      summary: Actualizar el perfil propio, superficie de asignación masiva
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                email: { type: string }
+                role: { type: string }
+      responses:
+        '200': { description: OK }
+
+  /api/files:
+    get:
+      summary: Leer documento, superficie de lectura de rutas no permitidas
+      parameters:
+        - name: file
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Ruta inválida }
+        '404': { description: No encontrado }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
