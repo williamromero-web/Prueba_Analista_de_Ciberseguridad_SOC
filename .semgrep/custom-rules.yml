@@ -1,0 +1,84 @@
+# ===========================================================================
+#  Reglas propias de análisis de código para la API de FleetSec
+# ===========================================================================
+#  La prueba pide al menos 2 reglas personalizadas. Aquí se definen 5, cada una
+#  apuntando a una de las fallas encontradas en la aplicación. Se ejecutan en el
+#  pipeline junto con el conjunto de reglas oficial de la herramienta.
+# ===========================================================================
+rules:
+  # -------------------------------------------------------------------------
+  # V-08 · Datos personales escritos en los logs
+  # Encuentra llamadas a console que mencionen campos de datos personales.
+  # -------------------------------------------------------------------------
+  - id: pii-logging-ley1581
+    patterns:
+      - pattern-either:
+          - pattern: console.log(...)
+          - pattern: console.info(...)
+          - pattern: console.error(...)
+          - pattern: console.warn(...)
+      - pattern-regex: "(?i)(cédula|cedula|email|correo|\\bcc\\b|telefono|teléfono|direccion|dirección)"
+    message: "Alto: se están escribiendo datos personales en texto plano. Imprimir correos, cedulas o telefonos en los logs incumple la Ley 1581. Use una función que enmascare el dato antes de registrarlo."
+    severity: ERROR
+    languages: [javascript]
+
+  # -------------------------------------------------------------------------
+  # V-01 · Inyección SQL
+  # Sigue el recorrido del dato: marca cuando lo que envia el usuario llega a
+  # la base de datos sin usar parámetros.
+  # -------------------------------------------------------------------------
+  - id: express-sqli-taint
+    mode: taint
+    pattern-sources:
+      - pattern: req.body
+      - pattern: req.query
+      - pattern: req.params
+    pattern-sinks:
+      - pattern: db.get($QUERY, ...)
+      - pattern: db.run($QUERY, ...)
+      - pattern: db.all($QUERY, ...)
+    message: "Crítico: posible inyección SQL. La entrada del usuario llega a la base de datos sin parametrizar. Use marcadores de posición y pase los valores como parámetros."
+    severity: ERROR
+    languages: [javascript]
+
+  # -------------------------------------------------------------------------
+  # V-02 · Token de sesión sin comprobar la firma
+  # Encuentra el uso de jwt.decode cuando antes no se llamo a jwt.verify.
+  # -------------------------------------------------------------------------
+  - id: jwt-decode-without-verify
+    patterns:
+      - pattern: jwt.decode(...)
+      - pattern-not-inside: |
+          jwt.verify(...)
+          ...
+    message: "Alto: se usa jwt.decode sin comprobar antes la firma. Esto permite aceptar tokens falsificados con el algoritmo none. Use jwt.verify indicando el algoritmo esperado."
+    severity: ERROR
+    languages: [javascript]
+
+  # -------------------------------------------------------------------------
+  # V-06 · Lectura de archivos fuera de la carpeta permitida
+  # Marca la lectura de archivos cuya ruta se arma pegando texto del usuario.
+  # -------------------------------------------------------------------------
+  - id: path-traversal-fs-read
+    patterns:
+      - pattern: fs.readFileSync(..., ...)
+      - pattern-inside: |
+          app.get('/api/files', ...)
+    message: "Alto: se leen archivos sin revisar la ruta. Resuelva la ruta y compruebe que sigue dentro de la carpeta permitida antes de abrir el archivo."
+    severity: ERROR
+    languages: [javascript]
+
+  # -------------------------------------------------------------------------
+  # V-07 · Inicio de sesión sin limite de intentos
+  # Marca el endpoint de login cuando no aplica un limitador de peticiones.
+  # -------------------------------------------------------------------------
+  - id: login-without-rate-limit
+    patterns:
+      - pattern-inside: |
+          app.post('/api/login', ...)
+      - pattern-not-inside: |
+          rateLimit(...)
+          ...
+    message: "Medio: el inicio de sesión no tiene limite de intentos. Aplique un limitador de peticiones para frenar los ataques de fuerza bruta."
+    severity: WARNING
+    languages: [javascript]
