@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Node.js: dependencias y archivos que se generan al ejecutar la aplicación
+# ---------------------------------------------------------------------------
+node_modules/
+app/node_modules/
+npm-debug.log*
+*.log
+
+# ---------------------------------------------------------------------------
+# Terraform: estado, providers descargados y cache local
+# ---------------------------------------------------------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# ---------------------------------------------------------------------------
+# Secretos y variables de entorno locales. Nunca deben subirse al repositorio
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Reportes que generan los escaneres de seguridad durante el pipeline
+# ---------------------------------------------------------------------------
+sbom-cyclonedx.json
+*-report.json
+zap-report.*
+trivy-*.json
