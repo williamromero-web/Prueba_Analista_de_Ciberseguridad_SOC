@@ -1,0 +1,35 @@
+# ===========================================================================
+#  Configuración del detector de secretos
+# ===========================================================================
+#  Parte del conjunto de reglas por defecto, que ya reconoce claves de AWS y
+#  otros proveedores, y le suma dos reglas propias para el secreto de sesión y
+#  las contraseñas de base de datos escritas en el código. Deja fuera la
+#  carpeta _vulnerable_baseline, que guarda a propósito el código vulnerable de
+#  referencia y por eso no debe detener el análisis del árbol final.
+# ===========================================================================
+title = "FleetSec Gitleaks Config"
+
+[extend]
+useDefault = true
+
+# --- Regla propia: secreto de sesión escrito en el código ----------------
+[[rules]]
+id = "fleetsec-jwt-secret"
+description = "Secreto de sesión escrito en el código"
+regex = '''(?i)(jwt[_-]?secret)\s*[:=]\s*['"][^'"]{8,}['"]'''
+tags = ["jwt", "secret"]
+
+# --- Regla propia: contraseña de base de datos escrita en el código ------
+[[rules]]
+id = "fleetsec-db-password"
+description = "Contraseña de base de datos escrita en el código"
+regex = '''(?i)(db[_-]?password|database[_-]?password)\s*[:=]\s*['"][^'"]{6,}['"]'''
+tags = ["password", "database"]
+
+[allowlist]
+description = "Excluye el código vulnerable de referencia y los ejemplos de la documentación"
+paths = [
+  '''_vulnerable_baseline/''',
+  '''vapt/poc/''',
+  '''README\.md''',
+]

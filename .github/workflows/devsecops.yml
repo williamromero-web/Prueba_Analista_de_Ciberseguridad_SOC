@@ -1,0 +1,258 @@
+name: Pipeline DevSecOps - FleetSec
+
+# ===========================================================================
+#  Pipeline de seguridad de la aplicación.
+#  Etapas: busqueda de secretos, análisis de código, análisis de dependencias
+#  con inventario de componentes, revisión del contenedor y la infraestructura,
+#  escaneo dinámico de la API y resumen final.
+#
+#  Para mantener la ejecución por debajo de 15 minutos:
+#    - Las etapas de análisis corren en paralelo.
+#    - Se guarda en cache la instalación de las herramientas.
+#    - Cada escaner revisa solo la carpeta que le corresponde y se deja fuera
+#      el código vulnerable de referencia.
+# ===========================================================================
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Cancela ejecuciones anteriores de la misma rama para no gastar minutos.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # 1. SECRETOS. Busca claves de nube, secretos de sesión y contraseñas.
+  # =========================================================================
+  secrets-scanning:
+    name: Secretos - Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ejecutar el detector de secretos
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
+          # Se revisa el árbol de trabajo actual, no el historial. La
+          # configuración propia deja fuera el código vulnerable de referencia.
+          ./gitleaks detect --no-git --source . --config .gitleaks.toml \
+            --report-format json --report-path gitleaks-report.json -v
+
+      - name: Publicar el reporte de secretos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # 2. ANALISIS DE CODIGO. Reglas oficiales más las propias. No se permite
+  #    ningún hallazgo alto o crítico.
+  # =========================================================================
+  sast-semgrep:
+    name: Análisis de código - Semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache de dependencias
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-semgrep-${{ runner.os }}
+
+      - name: Instalar la herramienta
+        run: pip install --quiet semgrep
+
+      - name: Analizar el código de la aplicación
+        run: |
+          semgrep scan app/ \
+            --config auto \
+            --config .semgrep/custom-rules.yml \
+            --json --output semgrep-report.json \
+            --error
+
+      - name: Publicar el reporte de análisis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # 3. DEPENDENCIAS E INVENTARIO. Detiene el pipeline ante fallas altas o
+  #    críticas y genera el inventario de componentes.
+  # =========================================================================
+  sca-trivy:
+    name: Dependencias e inventario - Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Revisar dependencias y detener ante fallas altas o críticas
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'app'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: Generar el inventario de componentes
+        if: success()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'app'
+          format: 'cyclonedx'
+          output: 'sbom-cyclonedx.json'
+
+      - name: Publicar el inventario
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom-cyclonedx.json
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # 4. CONTENEDOR E INFRAESTRUCTURA. Revisa el Dockerfile, la imagen ya
+  #    construida y el código de infraestructura.
+  # =========================================================================
+  container-iac:
+    name: Contenedor e infraestructura
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Revisar el Dockerfile y exigir una versión fija de la imagen base
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ./app/Dockerfile
+          failure-threshold: error
+
+      - name: Construir la imagen
+        run: docker build -t fleetsec-app:ci ./app
+
+      - name: Revisar la imagen y detener ante fallas críticas
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: 'fleetsec-app:ci'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+
+      - name: Revisar la infraestructura y detener ante puertos administrativos abiertos
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infrastructure/
+          soft_fail: false
+
+  # =========================================================================
+  # 5. ESCANEO DINAMICO. Recorre la API con un token de sesión válido.
+  #    Los hallazgos altos detienen el pipeline y los medios abren un caso
+  #    de seguimiento etiquetado.
+  # =========================================================================
+  dast-zap:
+    name: Escaneo dinámico - OWASP ZAP
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Levantar la aplicación en un entorno de pruebas
+        run: |
+          docker build -t fleetsec-app:ci ./app
+          docker run -d --network host --name app \
+            -e JWT_SECRET=super_secret_key fleetsec-app:ci
+          # Espera a que la API empiece a responder
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:3000/ >/dev/null 2>&1 && break || sleep 2
+          done
+
+      - name: Generar un token de sesión para las pruebas
+        run: |
+          cd app && npm install jsonwebtoken --no-audit --no-fund
+          TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},'super_secret_key',{algorithm:'HS256'}))")
+          echo "ZAP_JWT_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Escanear la API con sesión iniciada
+        uses: zaproxy/action-api-scan@v0.9.0
+        with:
+          target: 'app/openapi.yaml'
+          format: openapi
+          fail_action: true          # los hallazgos altos detienen el pipeline
+          allow_issue_writing: false # el caso de los medios se abre más abajo
+          cmd_options: '-z "-config replacer.full_list(0).description=auth
+            -config replacer.full_list(0).enabled=true
+            -config replacer.full_list(0).matchtype=REQ_HEADER
+            -config replacer.full_list(0).matchstr=Authorization
+            -config replacer.full_list(0).regex=false
+            -config replacer.full_list(0).replacement=Bearer ${{ env.ZAP_JWT_TOKEN }}"'
+
+      - name: Abrir un caso de seguimiento por los hallazgos medios
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let medium = 0;
+            try {
+              const rep = JSON.parse(fs.readFileSync('report_json.json','utf8'));
+              for (const site of rep.site || []) {
+                for (const a of site.alerts || []) {
+                  if (String(a.riskcode) === '2') medium++;   // 2 corresponde a severidad media
+                }
+              }
+            } catch (e) { core.info('Sin reporte del escaneo dinámico: ' + e.message); }
+            if (medium > 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[DAST] ${medium} hallazgo de severidad media detectado por el escaneo dinámico`,
+                labels: ['security/medium'],
+                body: `El escaneo dinámico reportó ${medium} alerta de severidad media en la rama principal.\n\nRevisar el reporte adjunto de la ejecución número ${context.runNumber}.`
+              });
+            }
+
+  # =========================================================================
+  # 6. RESUMEN. Consolida el estado de todas las etapas en un solo cuadro.
+  # =========================================================================
+  security-summary:
+    name: Resumen consolidado
+    runs-on: ubuntu-latest
+    needs: [secrets-scanning, sast-semgrep, sca-trivy, container-iac, dast-zap]
+    if: always()
+    steps:
+      - name: Generar el cuadro resumen
+        run: |
+          {
+            echo "# Resumen del pipeline de seguridad"
+            echo ""
+            echo "| Etapa | Herramienta | Resultado |"
+            echo "| :--- | :--- | :---: |"
+            echo "| Secretos | Gitleaks | ${{ needs.secrets-scanning.result }} |"
+            echo "| Análisis de código | Semgrep | ${{ needs.sast-semgrep.result }} |"
+            echo "| Dependencias e inventario | Trivy | ${{ needs.sca-trivy.result }} |"
+            echo "| Contenedor e infraestructura | Hadolint, Trivy y Checkov | ${{ needs.container-iac.result }} |"
+            echo "| Escaneo dinámico | OWASP ZAP | ${{ needs.dast-zap.result }} |"
+            echo ""
+            echo "> Un resultado en failure significa que la etapa detuvo la integración por hallazgos de severidad alta o crítica."
+          } >> $GITHUB_STEP_SUMMARY

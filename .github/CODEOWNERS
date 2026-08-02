@@ -1,0 +1,20 @@
+# ===========================================================================
+#  Propietarios del código y control de cambios
+# ===========================================================================
+#  Todo cambio necesita la revisión de los propietarios. En las rutas más
+#  sensibles se exigen dos aprobaciones antes de poder integrar a la rama
+#  principal. Esto se complementa con la protección de rama configurada en
+#  GitHub, donde se activa la revisión obligatoria de los propietarios.
+#
+#  Para las emergencias existe un procedimiento aparte: el uso de la excepción
+#  queda registrado en el historial y abre de forma automática un caso crítico
+#  de seguimiento.
+# ===========================================================================
+
+# Propietarios por defecto de todo el repositorio
+*                       @williamromero-web @fleetsec-security-lead
+
+# Rutas críticas de seguridad, necesitan doble aprobación
+/.github/                @williamromero-web @fleetsec-security-lead
+/infrastructure/         @williamromero-web @fleetsec-security-lead
+/app/                    @williamromero-web @fleetsec-security-lead
