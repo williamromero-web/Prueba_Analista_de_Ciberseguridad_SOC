@@ -108,23 +108,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Se instala la herramienta desde su binario oficial para no depender de
-      # la accion, que arrastraba un componente interno inexistente y rompia el
-      # arranque de la etapa. La versión queda fijada.
-      - name: Instalar la herramienta de análisis
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.56.2
-          trivy --versión
-
+      # Se ejecuta la herramienta desde su imagen oficial para no depender del
+      # instalador ni de la accion. La versión queda fijada.
       - name: Revisar dependencias y detener ante fallas altas o críticas
         run: |
-          trivy fs --scanners vuln --severity CRITICAL,HIGH \
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            fs --scanners vuln --severity CRITICAL,HIGH \
             --ignore-unfixed --exit-code 1 app/
 
       - name: Generar el inventario de componentes
         if: success()
-        run: trivy fs --format cyclonedx --output sbom-cyclonedx.json app/
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            fs --format cyclonedx --output sbom-cyclonedx.json app/
 
       - name: Publicar el inventario
         if: always()
@@ -154,15 +150,10 @@ jobs:
       - name: Construir la imagen
         run: docker build -t fleetsec-app:ci ./app
 
-      - name: Instalar la herramienta de análisis
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.56.2
-
       - name: Revisar la imagen y detener ante fallas críticas
         run: |
-          trivy image --severity CRITICAL --ignore-unfixed \
-            --exit-code 1 fleetsec-app:ci
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.72.0 \
+            image --severity CRITICAL --ignore-unfixed --exit-code 1 fleetsec-app:ci
 
       - name: Revisar la infraestructura y detener ante puertos administrativos abiertos
         uses: bridgecrewio/checkov-action@master
