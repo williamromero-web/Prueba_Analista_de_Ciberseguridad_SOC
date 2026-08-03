@@ -1,0 +1,16 @@
+# ===========================================================================
+#  Revisión de secretos antes de cada commit.
+#  Instalación:
+#     pip install pre-commit
+#     pre-commit install
+#  Desde ese momento, cada commit ejecuta el detector de secretos en local y
+#  detiene el commit si encuentra claves de nube, secretos de sesión o
+#  contraseñas de base de datos.
+# ===========================================================================
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+        name: Detección de secretos
+        args: ["protect", "--staged", "--config", ".gitleaks.toml", "-v"]

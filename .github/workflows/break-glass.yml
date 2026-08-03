@@ -1,0 +1,55 @@
+name: Acceso de emergencia
+
+# ===========================================================================
+#  Procedimiento de acceso de emergencia.
+#  El acceso normal a la rama principal exige dos aprobaciones. Cuando hace
+#  falta una excepción urgente, se activa este flujo a mano: abre de forma
+#  automática un caso crítico y deja el registro en el historial, con quien lo
+#  pidio, cuando y por que.
+# ===========================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: 'Motivo por el que se activa el acceso de emergencia'
+        required: true
+        type: string
+      responsable:
+        description: 'Persona que autoriza la excepción'
+        required: true
+        type: string
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  registrar:
+    name: Registrar el acceso de emergencia
+    runs-on: ubuntu-latest
+    steps:
+      - name: Abrir el caso crítico de auditoría
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { motivo, responsable } = context.payload.inputs;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Acceso de emergencia activado por ${responsable}`,
+              labels: ['security/critical', 'break-glass'],
+              body: [
+                `## Registro del acceso de emergencia`,
+                ``,
+                `- Responsable: ${responsable}`,
+                `- Usuario que lo ejecuto: @${context.actor}`,
+                `- Motivo: ${motivo}`,
+                `- Referencia del código: ${context.sha}`,
+                `- Ejecución: ${context.runId}`,
+                `- Fecha: ${new Date().toISOString()}`,
+                ``,
+                `> Este caso es el registro de la excepción. Debe cerrarse tras la revisión`,
+                `> posterior por parte de los dos propietarios del código, dejando anotada la causa.`
+              ].join('\n')
+            });
