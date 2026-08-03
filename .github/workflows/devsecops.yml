@@ -11,6 +11,9 @@ name: Pipeline DevSecOps - FleetSec
 #    - Se guarda en cache la instalación de las herramientas.
 #    - Cada escaner revisa solo la carpeta que le corresponde y se deja fuera
 #      el código vulnerable de referencia.
+#
+#  Las acciones de terceros se fijan por su identificador exacto de versión
+#  para evitar que un cambio en el origen altere el comportamiento.
 # ===========================================================================
 
 on:
@@ -106,7 +109,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Revisar dependencias y detener ante fallas altas o críticas
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: 'fs'
           scan-ref: 'app'
@@ -116,7 +119,7 @@ jobs:
 
       - name: Generar el inventario de componentes
         if: success()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: 'fs'
           scan-ref: 'app'
@@ -143,7 +146,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Revisar el Dockerfile y exigir una versión fija de la imagen base
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ./app/Dockerfile
           failure-threshold: error
@@ -152,7 +155,7 @@ jobs:
         run: docker build -t fleetsec-app:ci ./app
 
       - name: Revisar la imagen y detener ante fallas críticas
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: 'fleetsec-app:ci'
           exit-code: '1'
@@ -184,55 +187,74 @@ jobs:
         run: |
           docker build -t fleetsec-app:ci ./app
           docker run -d --network host --name app \
-            -e JWT_SECRET=super_secret_key fleetsec-app:ci
-          # Espera a que la API empiece a responder
-          for i in $(seq 1 15); do
-            curl -sf http://localhost:3000/ >/dev/null 2>&1 && break || sleep 2
+            -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/ >/dev/null 2>&1 && { echo "aplicación disponible"; break; } || sleep 2
           done
+          echo "=== estado de los contenedores ==="; docker ps -a
+          echo "=== registros de la aplicación ==="; docker logs app || true
+          curl -sf http://localhost:3000/ >/dev/null || { echo "La aplicación no responde en el puerto 3000"; exit 1; }
 
       - name: Generar un token de sesión para las pruebas
         run: |
-          cd app && npm install jsonwebtoken --no-audit --no-fund
-          TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},'super_secret_key',{algorithm:'HS256'}))")
+          TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},process.env.JWT_SECRET,{algorithm:'HS256'}))")
+          echo "::add-mask::$TOKEN"
           echo "ZAP_JWT_TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Escanear la API con sesión iniciada
-        uses: zaproxy/action-api-scan@v0.9.0
-        with:
-          target: 'app/openapi.yaml'
-          format: openapi
-          fail_action: true          # los hallazgos altos detienen el pipeline
-          allow_issue_writing: false # el caso de los medios se abre más abajo
-          cmd_options: '-z "-config replacer.full_list(0).description=auth
-            -config replacer.full_list(0).enabled=true
-            -config replacer.full_list(0).matchtype=REQ_HEADER
-            -config replacer.full_list(0).matchstr=Authorization
-            -config replacer.full_list(0).regex=false
-            -config replacer.full_list(0).replacement=Bearer ${{ env.ZAP_JWT_TOKEN }}"'
+        run: |
+          # Se dan permisos de escritura para que el contenedor del escaner
+          # pueda dejar el reporte en el espacio de trabajo.
+          sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
+          docker run --network host -v "$GITHUB_WORKSPACE":/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py \
+            -t /zap/wrk/app/openapi.yaml -f openapi \
+            -c /zap/wrk/.zap/rules.tsv \
+            -J report_json.json -r report_html.html \
+            -z "-config replacer.full_list(0).description=auth \
+                -config replacer.full_list(0).enabled=true \
+                -config replacer.full_list(0).matchtype=REQ_HEADER \
+                -config replacer.full_list(0).matchstr=Authorization \
+                -config replacer.full_list(0).replacement=Bearer ${ZAP_JWT_TOKEN}" \
+            || true
+          test -f report_json.json || { echo "El escaner no genero el reporte"; exit 1; }
 
-      - name: Abrir un caso de seguimiento por los hallazgos medios
+      - name: Publicar el reporte del escaneo dinámico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: |
+            report_json.json
+            report_html.html
+          if-no-files-found: ignore
+
+      - name: Revisar los hallazgos y decidir si se detiene la integración
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let medium = 0;
-            try {
-              const rep = JSON.parse(fs.readFileSync('report_json.json','utf8'));
-              for (const site of rep.site || []) {
-                for (const a of site.alerts || []) {
-                  if (String(a.riskcode) === '2') medium++;   // 2 corresponde a severidad media
-                }
+            let high = 0, medium = 0;
+            const rep = JSON.parse(fs.readFileSync('report_json.json', 'utf8'));
+            for (const site of rep.site || []) {
+              for (const a of site.alerts || []) {
+                if (a.riskcode === '3') high++;
+                else if (a.riskcode === '2') medium++;
               }
-            } catch (e) { core.info('Sin reporte del escaneo dinámico: ' + e.message); }
+            }
+            core.info(`Resultado del escaneo dinámico: altos ${high}, medios ${medium}`);
             if (medium > 0) {
               await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: `[DAST] ${medium} hallazgo de severidad media detectado por el escaneo dinámico`,
+                title: `[DAST] Hallazgos de severidad media detectados por el escaneo dinámico`,
                 labels: ['security/medium'],
-                body: `El escaneo dinámico reportó ${medium} alerta de severidad media en la rama principal.\n\nRevisar el reporte adjunto de la ejecución número ${context.runNumber}.`
+                body: `El escaneo dinámico reportó ${medium} alerta de severidad media en la rama principal. Revisar el reporte adjunto de la ejecución número ${context.runNumber}.`
               });
+            }
+            if (high > 0) {
+              core.setFailed(`El escaneo dinámico detuvo la integración por ${high} hallazgo de severidad alta.`);
             }
 
   # =========================================================================
