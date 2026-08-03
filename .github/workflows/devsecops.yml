@@ -238,13 +238,26 @@ jobs:
             }
             core.info(`Resultado del escaneo dinámico: altos ${high}, medios ${medium}`);
             if (medium > 0) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `[DAST] Hallazgos de severidad media detectados por el escaneo dinámico`,
-                labels: ['security/medium'],
-                body: `El escaneo dinámico reportó ${medium} alerta de severidad media en la rama principal. Revisar el reporte adjunto de la ejecución número ${context.runNumber}.`
+              // Si ya hay un caso abierto por hallazgos medios, se agrega un
+              // comentario en lugar de abrir uno nuevo en cada ejecución.
+              const abiertos = await github.rest.issues.listForRepo({
+                owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', labels: 'security/medium'
               });
+              const caso = abiertos.data.find(i => i.title.startsWith('[DAST]'));
+              const texto = `El escaneo dinámico reportó ${medium} alerta de severidad media en la rama principal. Revisar el reporte adjunto de la ejecución número ${context.runNumber}.`;
+              if (caso) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: caso.number, body: texto
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: `[DAST] Hallazgos de severidad media detectados por el escaneo dinámico`,
+                  labels: ['security/medium'], body: texto
+                });
+              }
             }
             if (high > 0) {
               core.setFailed(`El escaneo dinámico detuvo la integración por ${high} hallazgo de severidad alta.`);
