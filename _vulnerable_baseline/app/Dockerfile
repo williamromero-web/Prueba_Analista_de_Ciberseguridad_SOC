@@ -1,5 +1,5 @@
 # ===========================================================================
-#  Dockerfile - versión vulnerable para el laboratorio
+#  Dockerfile - versión vulnerable
 # ===========================================================================
 #  Malas prácticas puestas a propósito para que el escaneo de contenedor las
 #  encuentre:

@@ -1,6 +1,8 @@
 # ===========================================================================
 #  Levanta el entorno de demostración con un solo comando:
-#     docker compose up -d --build
+#     JWT_SECRET=$(openssl rand -hex 24) docker compose up -d --build
+#  También sirve exportar la variable o dejarla en un archivo .env, que el
+#  repositorio ya ignora.
 # ===========================================================================
 version: '3.8'
 
@@ -11,8 +13,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # El secreto de sesión se pasa por variable de entorno
       - NODE_ENV=staging
-      - JWT_SECRET=cambie_este_secreto_en_produccion_32chars
+      # El secreto llega desde el entorno y no se guarda en el repositorio.
+      # Si la variable no esta definida, el arranque se detiene con un aviso.
+      - JWT_SECRET=${JWT_SECRET:?Defina JWT_SECRET en el entorno o en .env}
       - PORT=3000
     restart: unless-stopped
