@@ -1,16 +1,33 @@
 # ===========================================================================
-#  Dockerfile - versión endurecida
+#  Dockerfile - versión endurecida, construcción en dos fases
 # ===========================================================================
 #  Cambios aplicados:
 #    - Versión de la imagen base fijada, ya no se usa la última disponible
-#    - Instalación reproducible a partir del archivo de bloqueo
-#    - Se quita npm de la imagen final para reducir la superficie de ataque
+#    - El módulo nativo de la base de datos se compila en una fase aparte, para
+#      que quede enlazado con la versión del sistema del contenedor final
+#    - La imagen final no lleva compiladores ni npm, para reducir el ataque
 #    - El contenedor deja de correr como root y pasa al usuario node
-#    - Se agrega una comprobación de estado para el orquestador
+#    - Se aplican los parches del sistema base y se agrega una comprobación de estado
 # ===========================================================================
 
-# Versión fija de la imagen base. Se usa la variante de Debian porque trae
-# binarios ya compilados para la base de datos y evita instalar compiladores.
+# ---- Fase 1: construcción, con las herramientas para compilar el módulo ----
+FROM node:20.18.1-bookworm-slim AS builder
+
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/app
+COPY package*.json ./
+
+# Se fuerza la compilación desde el código, en lugar de bajar un binario
+# preparado, para que quede enlazado con la versión del sistema de esta imagen
+# y cargue bien en la fase final.
+ENV npm_config_build_from_source=true
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# ---- Fase 2: imagen final, mínima, sin herramientas y sin privilegios ------
 FROM node:20.18.1-bookworm-slim
 
 # Parches de seguridad del sistema base.
@@ -20,12 +37,9 @@ RUN apt-get update && apt-get upgrade -y \
 
 WORKDIR /usr/src/app
 
-# Copia de los manifiestos e instalación de las dependencias de producción.
+# Se copian las dependencias ya compiladas y el código.
+COPY --from=builder --chown=node:node /usr/src/app/node_modules ./node_modules
 COPY --chown=node:node package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund \
-    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
-
-# Código de la aplicación.
 COPY --chown=node:node server.js ./
 COPY --chown=node:node docs ./docs
 
