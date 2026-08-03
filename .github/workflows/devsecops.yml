@@ -12,8 +12,8 @@ name: Pipeline DevSecOps - FleetSec
 #    - Cada escaner revisa solo la carpeta que le corresponde y se deja fuera
 #      el código vulnerable de referencia.
 #
-#  Las acciones de terceros se fijan por su identificador exacto de versión
-#  para evitar que un cambio en el origen altere el comportamiento.
+#  Las acciones de terceros se encuentran por su identificador exacto de versión
+#  para evitar que cualquier cambio en el origen altere el comportamiento.
 # ===========================================================================
 
 on:
@@ -108,23 +108,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Se instala la herramienta desde su binario oficial para no depender de
+      # la accion, que arrastraba un componente interno inexistente y rompia el
+      # arranque de la etapa. La versión queda fijada.
+      - name: Instalar la herramienta de análisis
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.56.2
+          trivy --versión
+
       - name: Revisar dependencias y detener ante fallas altas o críticas
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'app'
-          exit-code: '1'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
+        run: |
+          trivy fs --scanners vuln --severity CRITICAL,HIGH \
+            --ignore-unfixed --exit-code 1 app/
 
       - name: Generar el inventario de componentes
         if: success()
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'app'
-          format: 'cyclonedx'
-          output: 'sbom-cyclonedx.json'
+        run: trivy fs --format cyclonedx --output sbom-cyclonedx.json app/
 
       - name: Publicar el inventario
         if: always()
@@ -154,13 +154,15 @@ jobs:
       - name: Construir la imagen
         run: docker build -t fleetsec-app:ci ./app
 
+      - name: Instalar la herramienta de análisis
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.56.2
+
       - name: Revisar la imagen y detener ante fallas críticas
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
-        with:
-          image-ref: 'fleetsec-app:ci'
-          exit-code: '1'
-          severity: 'CRITICAL'
-          ignore-unfixed: true
+        run: |
+          trivy image --severity CRITICAL --ignore-unfixed \
+            --exit-code 1 fleetsec-app:ci
 
       - name: Revisar la infraestructura y detener ante puertos administrativos abiertos
         uses: bridgecrewio/checkov-action@master
