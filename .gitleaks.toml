@@ -1,11 +1,11 @@
 # ===========================================================================
 #  Configuración del detector de secretos
 # ===========================================================================
-#  Parte del conjunto de reglas por defecto, que ya reconoce claves de AWS y
+#  Inicia a partir del conjunto de reglas por defecto, ya reconoce claves de AWS y
 #  otros proveedores, y le suma dos reglas propias para el secreto de sesión y
 #  las contraseñas de base de datos escritas en el código. Deja fuera la
 #  carpeta _vulnerable_baseline, que guarda a propósito el código vulnerable de
-#  referencia y por eso no debe detener el análisis del árbol final.
+#  referencia.
 # ===========================================================================
 title = "FleetSec Gitleaks Config"
 
@@ -27,9 +27,17 @@ regex = '''(?i)(db[_-]?password|database[_-]?password)\s*[:=]\s*['"][^'"]{6,}['"
 tags = ["password", "database"]
 
 [allowlist]
-description = "Excluye el código vulnerable de referencia y los ejemplos de la documentación"
+description = "Excluye el código vulnerable de referencia, los ejemplos de la documentación y los falsos positivos"
+# En las rutas se aceptan las dos formas de separador para que la exclusión
+# funcione igual en Windows y en Linux.
 paths = [
-  '''_vulnerable_baseline/''',
-  '''vapt/poc/''',
+  '''_vulnerable_baseline''',
+  '''vapt[\\/]poc''',
   '''README\.md''',
+]
+# Falsos positivos: nombres de reglas de control de AWS que llevan la palabra
+# password pero no son secretos, sino identificadores del propio servicio.
+regexes = [
+  '''IAM_PASSWORD_POLICY''',
+  '''iam-password-policy''',
 ]
