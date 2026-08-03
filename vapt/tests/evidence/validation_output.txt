@@ -1,0 +1,23 @@
+V01 · Inyección SQL
+  [OK] intento malicioso rechazado
+  [OK] inicio de sesión normal funciona
+V02 · Token de sesión
+  [OK] token falso rechazado
+  [OK] token válido funciona
+V03 · Petición forzada
+  [OK] destino interno rechazado
+V04 · Entidades en el XML
+  [OK] declaración de entidades rechazada
+  [OK] XML normal funciona
+V05 · Asignación masiva
+  [OK] campo de rol descartado
+V06 · Lectura de rutas
+  [OK] salida de carpeta rechazada
+  [OK] archivo permitido funciona
+V09 · Acceso a datos ajenos
+  [OK] no lee el perfil ajeno
+  [OK] lee su propio perfil
+V07 · Limite de intentos, puede requerir una ventana limpia
+  [OK] se rechaza al superar el limite
+---------------------------------------------
+RESULTADO: todas las comprobaciones pasaron

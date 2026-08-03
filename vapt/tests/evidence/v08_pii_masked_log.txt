@@ -1,0 +1,2 @@
+[INFO] Login exitoso {"userId":1,"email":"ad****om","cc":"12****89"}
+[INFO] Login exitoso {"userId":2,"email":"us****om","cc":"98****21"}
