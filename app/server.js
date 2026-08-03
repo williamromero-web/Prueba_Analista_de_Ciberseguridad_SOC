@@ -19,7 +19,9 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
-const { DOMParser } = require('xmldom');
+// Se usa la versión mantenida del lector de XML. El paquete anterior esta
+// descontinuado y arrastraba fallas conocidas sin arreglo.
+const { DOMParser } = require('@xmldom/xmldom');
 const xpath = require('xpath');
 
 const app = express();
