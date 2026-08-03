@@ -13,6 +13,11 @@
 # binarios ya compilados para la base de datos y evita instalar compiladores.
 FROM node:20.18.1-bookworm-slim
 
+# Parches de seguridad del sistema base.
+# hadolint ignore=DL3005
+RUN apt-get update && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/src/app
 
 # Copia de los manifiestos e instalación de las dependencias de producción.
