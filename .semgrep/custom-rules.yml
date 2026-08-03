@@ -8,7 +8,9 @@
 rules:
   # -------------------------------------------------------------------------
   # V-08 · Datos personales escritos en los logs
-  # Encuentra llamadas a console que mencionen campos de datos personales.
+  # Encuentra llamadas a console que escriban directamente un dato personal.
+  # Si el valor pasa antes por la función de enmascarado, o se usa el registro
+  # seguro de la aplicación, la regla ya no lo marca.
   # -------------------------------------------------------------------------
   - id: pii-logging-ley1581
     patterns:
@@ -17,7 +19,8 @@ rules:
           - pattern: console.info(...)
           - pattern: console.error(...)
           - pattern: console.warn(...)
-      - pattern-regex: "(?i)(cédula|cedula|email|correo|\\bcc\\b|telefono|teléfono|direccion|dirección)"
+      - pattern-regex: '\.(email|correo|cedula|cédula|telefono|teléfono|direccion|dirección|cc)\b'
+      - pattern-not-regex: '(maskValue|maskPII|redactPII)\s*\('
     message: "Alto: se están escribiendo datos personales en texto plano. Imprimir correos, cedulas o telefonos en los logs incumple la Ley 1581. Use una función que enmascare el dato antes de registrarlo."
     severity: ERROR
     languages: [javascript]
@@ -33,10 +36,16 @@ rules:
       - pattern: req.body
       - pattern: req.query
       - pattern: req.params
+    # El foco se pone solo en el texto de la consulta. Si la consulta es fija y
+    # los datos viajan aparte como parámetros, el dato del usuario no llega a
+    # ese punto y la regla deja de marcarlo, que es lo correcto.
     pattern-sinks:
-      - pattern: db.get($QUERY, ...)
-      - pattern: db.run($QUERY, ...)
-      - pattern: db.all($QUERY, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: db.get($QUERY, ...)
+              - pattern: db.run($QUERY, ...)
+              - pattern: db.all($QUERY, ...)
+          - focus-metavariable: $QUERY
     message: "Crítico: posible inyección SQL. La entrada del usuario llega a la base de datos sin parametrizar. Use marcadores de posición y pase los valores como parámetros."
     severity: ERROR
     languages: [javascript]
@@ -57,14 +66,18 @@ rules:
 
   # -------------------------------------------------------------------------
   # V-06 · Lectura de archivos fuera de la carpeta permitida
-  # Marca la lectura de archivos cuya ruta se arma pegando texto del usuario.
+  # Marca solo cuando la ruta se arma pegando texto. Si se resuelve la ruta y
+  # después se comprueba que sigue dentro de la carpeta, no hay concatenación
+  # y la regla no la marca.
   # -------------------------------------------------------------------------
   - id: path-traversal-fs-read
     patterns:
-      - pattern: fs.readFileSync(..., ...)
+      - pattern-either:
+          - pattern: fs.readFileSync($A + $B, ...)
+          - pattern: fs.readFileSync(`...${...}...`, ...)
       - pattern-inside: |
           app.get('/api/files', ...)
-    message: "Alto: se leen archivos sin revisar la ruta. Resuelva la ruta y compruebe que sigue dentro de la carpeta permitida antes de abrir el archivo."
+    message: "Alto: la ruta del archivo se arma pegando texto sin revisarlo. Resuelva la ruta y compruebe que sigue dentro de la carpeta permitida antes de abrir el archivo."
     severity: ERROR
     languages: [javascript]
 

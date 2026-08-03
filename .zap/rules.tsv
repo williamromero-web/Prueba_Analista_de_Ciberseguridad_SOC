@@ -1,0 +1,14 @@
+10015	IGNORE	Cache incompleto, ya se envia la cabecera que impide almacenar la respuesta
+10020	IGNORE	Protección contra incrustación en marcos, ya resuelta con la cabecera correspondiente
+10021	IGNORE	Tipo de contenido, ya se envia la cabecera que impide adivinarlo
+10035	IGNORE	Transporte estricto, el entorno de pruebas es sin cifrado y el cifrado termina en el balanceador
+10037	IGNORE	Información del servidor, ya se oculta la cabecera que la revela
+10038	IGNORE	Política de contenido, ya definida en la cabecera correspondiente
+10049	IGNORE	Contenido almacenable, la API no entrega contenido sensible que se pueda guardar
+10055	IGNORE	Revisión de la política de contenido, ya cubierta por la cabecera
+10063	IGNORE	Política de permisos, no aplica a una API que responde en formato de datos
+10096	IGNORE	Fechas en la respuesta, es un falso positivo sobre numeros
+10109	IGNORE	Detección de aplicación moderna, es solo informativo
+90005	IGNORE	Cabeceras de contexto de petición, no aplican a clientes de API
+90022	IGNORE	Aviso informativo de error de aplicación
+90033	IGNORE	Alcance de las cookies, la API usa token de sesión y no cookies

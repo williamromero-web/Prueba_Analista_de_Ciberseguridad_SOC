@@ -76,10 +76,13 @@ jobs:
         run: pip install --quiet semgrep
 
       - name: Analizar el código de la aplicación
+        # Solo se detiene la integración ante hallazgos altos o críticos.
+        # Los medios y bajos quedan como información para revisar después.
         run: |
           semgrep scan app/ \
             --config auto \
             --config .semgrep/custom-rules.yml \
+            --severity ERROR \
             --json --output semgrep-report.json \
             --error
 
