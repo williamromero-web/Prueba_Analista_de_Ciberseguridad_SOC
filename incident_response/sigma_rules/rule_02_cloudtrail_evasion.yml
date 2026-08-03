@@ -1,0 +1,30 @@
+title: Intento de borrar o alterar el registro de actividad de la cuenta
+id: b01fad56-e9be-49bd-9f67-13a4efde60ff
+status: stable
+description: >
+  Detecta los intentos de borrar, detener o modificar el registro de actividad
+  de la cuenta, una maniobra típica para borrar huellas. Corresponde al intento
+  de borrado del registro que ocurrio a la hora y 45 minutos del incidente y que
+  quedo bloqueado por las políticas de la organización.
+references:
+  - https://attack.mitre.org/techniques/T1562/008/
+author: Ingeniería de Ciberseguridad FleetSec
+date: 2026/08/01
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: cloudtrail.amazonaws.com
+    eventName:
+      - DeleteTrail
+      - StopLogging
+      - UpdateTrail
+  condition: selection
+fields:
+  - userIdentity.arn
+  - sourceIPAddress
+  - requestParameters.name
+falsepositives:
+  - Eliminación de infraestructura temporal en entornos de desarrollo.
+level: critical

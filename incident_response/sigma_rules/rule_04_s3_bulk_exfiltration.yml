@@ -1,0 +1,46 @@
+# ===========================================================================
+#  Regla 4, adicional. Descarga masiva de archivos del almacenamiento.
+#  Se arma con una correlación, la forma moderna que reemplaza al conteo con
+#  la sintaxis antigua. Una regla base detecta cada descarga y la correlación
+#  se dispara si un mismo usuario supera las 100 descargas en 5 minutos sobre
+#  un mismo depósito. Corresponde al evento registrado a los 35 minutos del
+#  incidente.
+# ===========================================================================
+title: Descarga base de un archivo del almacenamiento
+id: a0bfca57-cb8d-4bb8-a493-154f7ef1c4ff
+name: s3_getobject_base
+status: experimental
+description: Evento base de descarga de un archivo del almacenamiento.
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: s3.amazonaws.com
+    eventName: GetObject
+  condition: selection
+level: informational
+---
+title: Descarga masiva de archivos del almacenamiento
+id: d296fa12-4a4a-464e-943c-2c12ab4cb1bb
+status: experimental
+description: >
+  Detecta la descarga masiva de archivos: más de 100 descargas en 5 minutos por
+  parte del mismo usuario sobre un mismo depósito.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+author: Ingeniería de Ciberseguridad FleetSec
+date: 2026/08/01
+correlation:
+  type: event_count
+  rules:
+    - s3_getobject_base
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 5m
+  condition:
+    gte: 100
+falsepositives:
+  - Procesos automaticos de analitica, copias de seguridad o restauraciones legitimas.
+level: high

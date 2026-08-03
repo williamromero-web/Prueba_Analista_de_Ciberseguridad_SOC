@@ -1,0 +1,31 @@
+title: Asignación de permisos de administrador a un usuario fuera de horario
+id: 163f052a-6ad7-4c60-836d-bee3edc9a316
+status: experimental
+description: >
+  Detecta cuando se asigna la política de administrador a un usuario o rol. La
+  alerta cobra más peso si ocurre fuera del horario de trabajo, entre la
+  medianoche y las seis de la manana. Ese acotamiento por hora se aplica en la
+  programación del detector. Corresponde al evento registrado a los 22 minutos
+  del incidente.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/
+author: Ingeniería de Ciberseguridad FleetSec
+date: 2026/08/01
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName:
+      - AttachUserPolicy
+      - AttachRolePolicy
+      - PutUserPolicy
+    requestParameters.policyArn: 'arn:aws:iam::aws:policy/AdministratorAccess'
+  condition: selection
+fields:
+  - userIdentity.arn
+  - requestParameters.userName
+  - sourceIPAddress
+falsepositives:
+  - Ventanas de mantenimiento de emergencia documentadas y aprobadas por el equipo de operaciones.
+level: high

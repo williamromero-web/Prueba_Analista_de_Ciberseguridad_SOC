@@ -1,0 +1,29 @@
+title: Patrones de inyección SQL en los parámetros de las peticiones web
+id: b1e3d379-4e5e-4fb1-9a79-913b8ccc9e9f
+status: stable
+description: >
+  Detecta las cadenas que suelen aparecer en los ataques de inyección SQL
+  dentro de los parámetros de las peticiones web que registra el servidor de la
+  aplicación.
+references:
+  - https://owasp.org/Top10/A03_2021-Injection/
+author: Ingeniería de Ciberseguridad FleetSec
+date: 2026/08/01
+logsource:
+  category: webserver
+detection:
+  keywords:
+    - 'UNION SELECT'
+    - "' OR '1'='1"
+    - ' OR 1=1'
+    - '%27%20OR%20%27'
+    - "'--"
+    - 'WAITFOR DELAY'
+    - 'information_schema'
+  condition: keywords
+fields:
+  - c-ip
+  - cs-uri-query
+falsepositives:
+  - Escaneos legitimos de las herramientas de seguridad durante el pipeline.
+level: high
