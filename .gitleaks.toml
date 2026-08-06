@@ -30,6 +30,11 @@ tags = ["password", "database"]
 description = "Excluye el código vulnerable de referencia, los ejemplos de la documentación y los falsos positivos"
 # En las rutas se aceptan las dos formas de separador para que la exclusión
 # funcione igual en Windows y en Linux.
+#
+# La primera línea, la de _vulnerable_baseline, es la que borra el pipeline
+# cuando se lanza a mano el modo de demostración, para que la versión vulnerable
+# entre en el alcance y las puertas se disparen. En una ejecución normal se
+# respeta y esa carpeta queda fuera.
 paths = [
   '''_vulnerable_baseline''',
   '''vapt[\\/]poc''',

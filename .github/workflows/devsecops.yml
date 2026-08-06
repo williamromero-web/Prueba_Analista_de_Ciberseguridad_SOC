@@ -4,7 +4,13 @@ name: Pipeline DevSecOps - FleetSec
 #  Pipeline de seguridad de la aplicación.
 #  Etapas: busqueda de secretos, análisis de código, análisis de dependencias
 #  con inventario de componentes, revisión del contenedor y la infraestructura,
-#  escaneo dinámico de la API y resumen final.
+#  escaneo dinámico de la API y el informe consolidado.
+#
+#  Cada etapa deja su reporte en formato JSON antes de decidir si detiene la
+#  integración. Así el informe final puede armarse con el panorama completo
+#  aunque una etapa haya fallado, y la condición que bloquea queda escrita de
+#  forma explícita en su propio paso en lugar de esconderse en un parámetro
+#  de la herramienta.
 #
 #  Para mantener la ejecución por debajo de 15 minutos:
 #    - Las etapas de análisis corren en paralelo.
@@ -22,6 +28,17 @@ on:
   pull_request:
     branches: [ "main" ]
 
+  # Ejecución a mano, para poder lanzar el modo de demostración sin ensuciar
+  # el resultado de la rama principal.
+  workflow_dispatch:
+    inputs:
+      incluir_baseline:
+        description: >-
+          Incluir la versión vulnerable de referencia en el alcance.
+          Las puertas se disparan y la ejecución termina en rojo a propósito.
+        type: boolean
+        default: false
+
 # Cancela ejecuciones anteriores de la misma rama para no gastar minutos.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,6 +46,12 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Interruptor único que leen todas las etapas. En un empujón o en una
+  # solicitud de cambios la entrada no existe, así que queda en falso y el
+  # alcance es el normal: solo la aplicación corregida.
+  INCLUIR_BASELINE: ${{ inputs.incluir_baseline == true }}
 
 jobs:
   # =========================================================================
@@ -41,13 +64,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preparar la configuración del detector
+        # La configuración efectiva se deriva de la real en lugar de mantener
+        # un segundo archivo, que acabaría desincronizándose. En modo de
+        # demostración se borra solo la línea que excluye la carpeta de la
+        # versión vulnerable; el resto de reglas y exclusiones quedan igual.
+        run: |
+          cp .gitleaks.toml gitleaks-efectivo.toml
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            sed -i "/'''_vulnerable_baseline'''/d" gitleaks-efectivo.toml
+            echo "Modo de demostración: la versión vulnerable entra en el alcance."
+          fi
+          echo "=== exclusiones efectivas ==="
+          sed -n '/^paths = \[/,/^\]/p' gitleaks-efectivo.toml
+
       - name: Ejecutar el detector de secretos
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
           tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
           # Se revisa el árbol de trabajo actual, no el historial. La
-          # configuración propia deja fuera el código vulnerable de referencia.
-          ./gitleaks detect --no-git --source . --config .gitleaks.toml \
+          # herramienta escribe el reporte y luego devuelve un código de
+          # error si encontró algo, así que el archivo queda disponible igual.
+          ./gitleaks detect --no-git --source . --config gitleaks-efectivo.toml \
             --report-format json --report-path gitleaks-report.json -v
 
       - name: Publicar el reporte de secretos
@@ -78,16 +116,29 @@ jobs:
       - name: Instalar la herramienta
         run: pip install --quiet semgrep
 
-      - name: Analizar el código de la aplicación
-        # Solo se detiene la integración ante hallazgos altos o críticos.
-        # Los medios y bajos quedan como información para revisar después.
+      - name: Definir el alcance del análisis
         run: |
-          semgrep scan app/ \
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            echo "ALCANCE=app/ _vulnerable_baseline/" >> "$GITHUB_ENV"
+            echo "Modo de demostración: la versión vulnerable entra en el alcance."
+          else
+            echo "ALCANCE=app/" >> "$GITHUB_ENV"
+          fi
+
+      - name: Analizar el código de la aplicación
+        # Se recogen todas las severidades para que el informe consolidado
+        # tenga el panorama completo. La condición que detiene la integración
+        # se evalúa aparte, sobre este mismo reporte.
+        #
+        # $ALCANCE va sin comillas a propósito: en modo de demostración lleva
+        # dos rutas y el intérprete debe separarlas en dos argumentos.
+        run: |
+          echo "Alcance del análisis: $ALCANCE"
+          # shellcheck disable=SC2086
+          semgrep scan $ALCANCE \
             --config auto \
             --config .semgrep/custom-rules.yml \
-            --severity ERROR \
-            --json --output semgrep-report.json \
-            --error
+            --json --output semgrep-report.json
 
       - name: Publicar el reporte de análisis
         if: always()
@@ -97,9 +148,22 @@ jobs:
           path: semgrep-report.json
           if-no-files-found: ignore
 
+      - name: Detener la integración ante hallazgos altos o críticos
+        # Los hallazgos de nivel ERROR son los que bloquean. Los medios y bajos
+        # quedan en el reporte como información para revisar después.
+        run: |
+          ERRORES=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-report.json)
+          echo "Hallazgos de nivel ERROR: $ERRORES"
+          if [ "$ERRORES" -gt 0 ]; then
+            jq -r '.results[] | select(.extra.severity == "ERROR")
+                   | "  - \(.check_id) en \(.path):\(.start.line)"' semgrep-report.json
+            echo "El análisis de código detuvo la integración."
+            exit 1
+          fi
+
   # =========================================================================
-  # 3. DEPENDENCIAS E INVENTARIO. Detiene el pipeline ante fallas altas o
-  #    críticas y genera el inventario de componentes.
+  # 3. DEPENDENCIAS E INVENTARIO. Detiene el pipeline según el puntaje de la
+  #    falla y genera el inventario de componentes.
   # =========================================================================
   sca-trivy:
     name: Dependencias e inventario - Trivy
@@ -110,11 +174,60 @@ jobs:
 
       # Se ejecuta la herramienta desde su imagen oficial para no depender del
       # instalador ni de la accion. La versión queda fijada.
-      - name: Revisar dependencias y detener ante fallas altas o críticas
+      - name: Revisar las dependencias
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
-            fs --scanners vuln --severity CRITICAL,HIGH \
-            --ignore-unfixed --exit-code 1 app/
+            fs --scanners vuln --ignore-unfixed \
+            --format json --output trivy-fs-report.json app/
+
+      - name: Revisar las dependencias de la versión vulnerable
+        # Solo en modo de demostración. Esa carpeta conserva el archivo de
+        # bloqueo anterior a la corrección, con fallas conocidas de puntaje
+        # alto. Se analiza aparte porque la herramienta acepta una sola ruta
+        # por ejecución.
+        if: env.INCLUIR_BASELINE == 'true'
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            fs --scanners vuln --ignore-unfixed \
+            --format json --output trivy-fs-baseline-report.json \
+            _vulnerable_baseline/app/
+
+      - name: Publicar el reporte de dependencias
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-report
+          path: |
+            trivy-fs-report.json
+            trivy-fs-baseline-report.json
+          if-no-files-found: ignore
+
+      - name: Detener ante fallas con puntaje alto
+        # La política exige bloquear un puntaje de 8.0 o más en una dependencia
+        # directa, y de 9.0 o más en una indirecta. Cuando la herramienta no
+        # informa la relación se asume directa, que es el criterio más estricto.
+        run: |
+          : > dependencias-bloqueantes.txt
+          for reporte in trivy-fs-report.json trivy-fs-baseline-report.json; do
+            [ -f "$reporte" ] || continue
+            jq -r --arg origen "$reporte" '
+              [ .Results[]?.Vulnerabilities[]?
+                | { id: .VulnerabilityID,
+                    paquete: .PkgName,
+                    relacion: (.Relationship // "direct"),
+                    puntaje: ([.CVSS[]?.V3Score] | max // 0) }
+                | select( (.relacion == "indirect" and .puntaje >= 9.0)
+                          or (.relacion != "indirect" and .puntaje >= 8.0) ) ]
+              | .[] | "  - \(.id) en \(.paquete) (\(.relacion), CVSS \(.puntaje)) [\($origen)]"
+            ' "$reporte" >> dependencias-bloqueantes.txt
+          done
+
+          cat dependencias-bloqueantes.txt
+          if [ -s dependencias-bloqueantes.txt ]; then
+            echo "Las dependencias detuvieron la integración por superar el puntaje permitido."
+            exit 1
+          fi
+          echo "Ninguna dependencia supera el puntaje permitido."
 
       - name: Generar el inventario de componentes
         if: success()
@@ -132,7 +245,8 @@ jobs:
 
   # =========================================================================
   # 4. CONTENEDOR E INFRAESTRUCTURA. Revisa el Dockerfile, la imagen ya
-  #    construida y el código de infraestructura.
+  #    construida y el código de infraestructura. Los tres escaneos corren
+  #    completos y al final un solo paso decide si se detiene la integración.
   # =========================================================================
   container-iac:
     name: Contenedor e infraestructura
@@ -141,25 +255,140 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Revisar el Dockerfile y exigir una versión fija de la imagen base
+      - name: Revisar el Dockerfile
+        # DL3006 se eleva a error para que una imagen base sin versión fija
+        # detenga la integración, tal como exige la política.
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ./app/Dockerfile
-          failure-threshold: error
+          format: json
+          output-file: hadolint-report.json
+          override-error: DL3006
+          no-fail: true
+
+      - name: Revisar el Dockerfile de la versión vulnerable
+        # Solo en modo de demostración. Esa versión declara la imagen base sin
+        # fijar la versión, que es justamente lo que DL3006 detiene.
+        if: env.INCLUIR_BASELINE == 'true'
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: ./_vulnerable_baseline/app/Dockerfile
+          format: json
+          output-file: hadolint-baseline-report.json
+          override-error: DL3006
+          no-fail: true
 
       - name: Construir la imagen
         run: docker build -t fleetsec-app:ci ./app
 
-      - name: Revisar la imagen y detener ante fallas críticas
+      - name: Revisar la imagen
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.72.0 \
-            image --severity CRITICAL --ignore-unfixed --exit-code 1 fleetsec-app:ci
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            image --ignore-unfixed \
+            --format json --output trivy-image-report.json fleetsec-app:ci
 
-      - name: Revisar la infraestructura y detener ante puertos administrativos abiertos
-        uses: bridgecrewio/checkov-action@master
+      - name: Construir y revisar la imagen de la versión vulnerable
+        # Solo en modo de demostración. Esa imagen instala las dependencias
+        # anteriores a la corrección, corre como root y conserva las
+        # herramientas de construcción, así que la revisión encuentra fallas
+        # críticas y la puerta se dispara.
+        if: env.INCLUIR_BASELINE == 'true'
+        run: |
+          docker build -t fleetsec-app:vulnerable ./_vulnerable_baseline/app
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE:/work" -w /work aquasec/trivy:0.72.0 \
+            image --ignore-unfixed \
+            --format json --output trivy-image-baseline-report.json \
+            fleetsec-app:vulnerable
+
+      - name: Cache de dependencias
+        uses: actions/cache@v4
         with:
-          directory: infrastructure/
-          soft_fail: false
+          path: ~/.cache/pip
+          key: pip-checkov-${{ runner.os }}
+
+      - name: Revisar la infraestructura
+        run: |
+          pip install --quiet "checkov>=3.2,<4"
+          # Se pide el resultado por la salida estándar y no se detiene aquí,
+          # porque la decisión se toma más abajo junto con los otros escaneos.
+          checkov --directory infrastructure/ --output json --soft-fail \
+            > checkov-report.json
+
+      - name: Publicar los reportes del contenedor y la infraestructura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-iac-report
+          path: |
+            hadolint-report.json
+            hadolint-baseline-report.json
+            trivy-image-report.json
+            trivy-image-baseline-report.json
+            checkov-report.json
+          if-no-files-found: ignore
+
+      - name: Detener la integración según los tres escaneos
+        run: |
+          # Checkov puede devolver un objeto o una lista de objetos, uno por
+          # marco de trabajo analizado. Se contemplan las dos formas.
+          CONTROLES_FALLIDOS='[ (if type == "array" then .[] else . end)
+                                | .results.failed_checks[]? ]'
+
+          # En modo de demostración hay dos reportes del Dockerfile, el de la
+          # aplicación y el de la versión vulnerable. Se suman los errores de
+          # todos los que existan.
+          DOCKERFILE=0
+          for reporte in hadolint-report.json hadolint-baseline-report.json; do
+            if [ -f "$reporte" ]; then
+              ERRORES=$(jq '[.[] | select(.level == "error")] | length' "$reporte")
+              DOCKERFILE=$((DOCKERFILE + ERRORES))
+              if [ "$ERRORES" -gt 0 ]; then
+                jq -r '.[] | select(.level == "error")
+                       | "  - \(.code) en \(.file):\(.line) \(.message)"' "$reporte"
+              fi
+            fi
+          done
+          # Igual que con el Dockerfile, en modo de demostración hay dos
+          # reportes de imagen: la de la aplicación y la vulnerable.
+          IMAGEN=0
+          for reporte in trivy-image-report.json trivy-image-baseline-report.json; do
+            if [ -f "$reporte" ]; then
+              CRITICAS=$(jq '[.Results[]?.Vulnerabilities[]?
+                              | select(.Severity == "CRITICAL")] | length' "$reporte")
+              IMAGEN=$((IMAGEN + CRITICAS))
+              if [ "$CRITICAS" -gt 0 ]; then
+                jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")
+                       | "  - \(.VulnerabilityID) en \(.PkgName) \(.InstalledVersion)"' \
+                  "$reporte" | sort -u | head -20
+              fi
+            fi
+          done
+          INFRA=$(jq "$CONTROLES_FALLIDOS | length" checkov-report.json)
+          PUERTOS=$(jq "$CONTROLES_FALLIDOS
+                        | map(select(.check_id == \"CKV_AWS_24\"
+                                     or .check_id == \"CKV_AWS_25\"))
+                        | length" checkov-report.json)
+
+          echo "Dockerfile, errores: $DOCKERFILE"
+          echo "Imagen, fallas críticas: $IMAGEN"
+          echo "Infraestructura, controles incumplidos: $INFRA (de administración expuestos: $PUERTOS)"
+
+          if [ "$PUERTOS" -gt 0 ]; then
+            jq -r "$CONTROLES_FALLIDOS
+                   | .[] | select(.check_id == \"CKV_AWS_24\" or .check_id == \"CKV_AWS_25\")
+                   | \"  - \(.check_id) en \(.resource)\"" checkov-report.json
+            echo "Hay un grupo de seguridad que abre un puerto de administración a Internet."
+          fi
+
+          if [ "$DOCKERFILE" -gt 0 ] || [ "$IMAGEN" -gt 0 ] || [ "$INFRA" -gt 0 ]; then
+            echo "La revisión del contenedor y la infraestructura detuvo la integración."
+            exit 1
+          fi
+          echo "El contenedor y la infraestructura cumplen la política."
 
   # =========================================================================
   # 5. ESCANEO DINAMICO. Recorre la API con un token de sesión válido.
@@ -177,20 +406,49 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Levantar la aplicación en un entorno de pruebas
+        # En modo de demostración se levanta la versión vulnerable en lugar de
+        # la corregida, para que el recorrido de la API encuentre las fallas
+        # reales y la puerta se dispare.
         run: |
-          docker build -t fleetsec-app:ci ./app
-          docker run -d --network host --name app \
-            -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            echo "Modo de demostración: se levanta la versión vulnerable."
+            docker build -t fleetsec-app:ci ./_vulnerable_baseline/app
+            # Esa versión lleva el secreto escrito en el código y no lee
+            # ninguna variable de entorno.
+            docker run -d --network host --name app fleetsec-app:ci
+          else
+            docker build -t fleetsec-app:ci ./app
+            docker run -d --network host --name app \
+              -e JWT_SECRET=super_secret_key_ci_solo_para_pruebas fleetsec-app:ci
+          fi
+          # Se espera a que el servidor conteste, sea cual sea el código. La
+          # versión corregida responde 200 en la raíz y la vulnerable devuelve
+          # 404 porque no define esa ruta; en los dos casos el servidor ya está
+          # levantado, que es lo único que hace falta comprobar aquí.
+          CODIGO=000
           for i in $(seq 1 30); do
-            curl -sf http://localhost:3000/ >/dev/null 2>&1 && { echo "aplicación disponible"; break; } || sleep 2
+            CODIGO=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ 2>/dev/null || echo 000)
+            if [ "$CODIGO" != "000" ]; then
+              echo "aplicación disponible, responde con el código $CODIGO"
+              break
+            fi
+            sleep 2
           done
           echo "=== estado de los contenedores ==="; docker ps -a
           echo "=== registros de la aplicación ==="; docker logs app || true
-          curl -sf http://localhost:3000/ >/dev/null || { echo "La aplicación no responde en el puerto 3000"; exit 1; }
+          if [ "$CODIGO" = "000" ]; then
+            echo "La aplicación no responde en el puerto 3000"
+            exit 1
+          fi
 
       - name: Generar un token de sesión para las pruebas
         run: |
-          TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},process.env.JWT_SECRET,{algorithm:'HS256'}))")
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            # La versión vulnerable firma con el secreto que lleva escrito.
+            TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},'super_secret_key',{algorithm:'HS256'}))")
+          else
+            TOKEN=$(docker exec app node -e "console.log(require('jsonwebtoken').sign({id:1,role:'admin'},process.env.JWT_SECRET,{algorithm:'HS256'}))")
+          fi
           echo "::add-mask::$TOKEN"
           echo "ZAP_JWT_TOKEN=$TOKEN" >> $GITHUB_ENV
 
@@ -264,26 +522,64 @@ jobs:
             }
 
   # =========================================================================
-  # 6. RESUMEN. Consolida el estado de todas las etapas en un solo cuadro.
+  # 6. INFORME CONSOLIDADO. Reúne la salida en formato JSON de todas las
+  #    etapas y arma un documento en PDF legible, con la misma presentación
+  #    del informe ejecutivo del análisis de vulnerabilidades. También publica
+  #    el cuadro resumen en el panel de la ejecución.
   # =========================================================================
-  security-summary:
-    name: Resumen consolidado
+  reporte-consolidado:
+    name: Informe consolidado
     runs-on: ubuntu-latest
     needs: [secrets-scanning, sast-semgrep, sca-trivy, container-iac, dast-zap]
     if: always()
     steps:
-      - name: Generar el cuadro resumen
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar el intérprete
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Instalar las dependencias del generador
+        run: pip install --quiet -r scripts/requirements.txt
+
+      - name: Descargar los reportes de todas las etapas
+        uses: actions/download-artifact@v4
+        with:
+          path: artefactos
+
+      - name: Generar el informe
+        # El resultado de cada etapa se pasa como parámetro para que el
+        # documento muestre cuál fue la que detuvo la integración.
         run: |
-          {
-            echo "# Resumen del pipeline de seguridad"
-            echo ""
-            echo "| Etapa | Herramienta | Resultado |"
-            echo "| :--- | :--- | :---: |"
-            echo "| Secretos | Gitleaks | ${{ needs.secrets-scanning.result }} |"
-            echo "| Análisis de código | Semgrep | ${{ needs.sast-semgrep.result }} |"
-            echo "| Dependencias e inventario | Trivy | ${{ needs.sca-trivy.result }} |"
-            echo "| Contenedor e infraestructura | Hadolint, Trivy y Checkov | ${{ needs.container-iac.result }} |"
-            echo "| Escaneo dinámico | OWASP ZAP | ${{ needs.dast-zap.result }} |"
-            echo ""
-            echo "> Un resultado en failure significa que la etapa detuvo la integración por hallazgos de severidad alta o crítica."
-          } >> $GITHUB_STEP_SUMMARY
+          if [ "$INCLUIR_BASELINE" = "true" ]; then
+            MARCA="--demostracion"
+          else
+            MARCA=""
+          fi
+          # shellcheck disable=SC2086
+          python scripts/generar_reporte_seguridad.py \
+            $MARCA \
+            --artefactos artefactos \
+            --salida informe-seguridad-fleetsec.pdf \
+            --resumen resumen-seguridad.md \
+            --etapa secretos=${{ needs.secrets-scanning.result }} \
+            --etapa sast=${{ needs.sast-semgrep.result }} \
+            --etapa sca=${{ needs.sca-trivy.result }} \
+            --etapa contenedor=${{ needs.container-iac.result }} \
+            --etapa dast=${{ needs.dast-zap.result }}
+
+      - name: Publicar el informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe-seguridad-pdf
+          path: informe-seguridad-fleetsec.pdf
+          if-no-files-found: warn
+
+      - name: Mostrar el resumen en el panel de la ejecución
+        if: always()
+        run: cat resumen-seguridad.md >> "$GITHUB_STEP_SUMMARY"

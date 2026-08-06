@@ -1,0 +1,32 @@
+# ===========================================================================
+#  Entorno de la versión VULNERABLE de referencia.
+#
+#  Levanta la aplicación tal como estaba antes de las correcciones, con sus
+#  secretos escritos en el código, sus consultas sin parametrizar y sus
+#  dependencias con fallas conocidas. Sirve para reproducir los ataques y para
+#  comprobar que las puertas del pipeline se disparan de verdad.
+#
+#      docker compose -f _vulnerable_baseline/docker-compose.yml up -d --build
+#      curl http://localhost:3001/
+#
+#  Se publica en el puerto 3001 para que pueda convivir con la versión
+#  corregida, que usa el 3000. Así se pueden comparar las dos lado a lado.
+#
+#  ADVERTENCIA: esta imagen es insegura a propósito. No debe salir del entorno
+#  local ni exponerse fuera de la máquina donde se está probando.
+# ===========================================================================
+version: '3.8'
+
+services:
+  fleetsec-app-vulnerable:
+    build: ./app
+    image: fleetsec-app:vulnerable
+    container_name: fleetsec-api-vulnerable
+    ports:
+      # El contenedor escucha en el 3000; se publica en el 3001 del anfitrión.
+      - "3001:3000"
+    environment:
+      - NODE_ENV=development
+      # No se define ningún secreto: la aplicación los lleva escritos en el
+      # código, que es justamente la falla V-10 que hay que demostrar.
+    restart: "no"

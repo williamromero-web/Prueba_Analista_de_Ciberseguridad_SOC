@@ -1,0 +1,4 @@
+# Dependencias del generador del informe consolidado de seguridad.
+# Se fija el rango mayor para que una versión futura con cambios de API no
+# altere el resultado del pipeline.
+fpdf2>=2.7.9,<3.0
