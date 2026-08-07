@@ -7,7 +7,7 @@ respuesta a incidentes. El repositorio está pensado para ser reproducible: cada
 control tiene su evidencia y las versiones vulnerables se conservan aparte para
 poder comparar el antes y el después.
 
-> Enlace al video de sustentación: pendiente, se agrega antes de la entrega.
+> Enlace al video de sustentación: https://youtu.be/Fwv4ivvRyHs
 
 ---
 
